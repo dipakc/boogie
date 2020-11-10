@@ -847,6 +847,12 @@ namespace Microsoft.Boogie
 
     public List<ConcurrentHoudiniOptions> Cho = new List<ConcurrentHoudiniOptions>();
 
+    //Synthesis Options
+    public bool ToJSON = false;
+    public bool Synth = false;
+    public string SynthLogFilePath = null;
+    public string SynthGrammarFilePath = null;
+
     protected override bool ParseOption(string name, CommandLineOptionEngine.CommandLineParseState ps)
     {
       var args = ps.args; // convenient synonym
@@ -1598,6 +1604,23 @@ namespace Microsoft.Boogie
           ps.GetNumericArgument(ref KInductionDepth);
           return true;
 
+        case "synthLog":
+          if (ps.ConfirmArgumentCount(1))
+          {
+            SynthLogFilePath = args[ps.i]; 
+          }
+
+          return true;
+
+        case "synthGrammar":
+          if (ps.ConfirmArgumentCount(1))
+          {
+            SynthGrammarFilePath = args[ps.i]; 
+          }
+
+          return true;
+
+
         default:
           bool optionValue = false;
           if (ps.CheckBooleanFlag("printUnstructured", ref optionValue))
@@ -1650,7 +1673,9 @@ namespace Microsoft.Boogie
               ps.CheckBooleanFlag("trustNoninterference", ref TrustNoninterference) ||
               ps.CheckBooleanFlag("useBaseNameForFileName", ref UseBaseNameForFileName) ||
               ps.CheckBooleanFlag("freeVarLambdaLifting", ref FreeVarLambdaLifting) ||
-              ps.CheckBooleanFlag("warnNotEliminatedVars", ref WarnNotEliminatedVars)
+              ps.CheckBooleanFlag("warnNotEliminatedVars", ref WarnNotEliminatedVars) ||
+              ps.CheckBooleanFlag("synth", ref Synth) ||
+              ps.CheckBooleanFlag("tojson", ref ToJSON)
           )
           {
             // one of the boolean flags matched
@@ -1674,6 +1699,8 @@ namespace Microsoft.Boogie
       ExpandFilename(ref PrintFile, LogPrefix, FileTimestamp);
       ExpandFilename(ref ProverLogFilePath, LogPrefix, FileTimestamp);
       ExpandFilename(ref PrintErrorModelFile, LogPrefix, FileTimestamp);
+      
+      ExpandFilename(ref SynthLogFilePath, LogPrefix, FileTimestamp);
 
       Contract.Assume(XmlSink == null); // XmlSink is to be set here
       if (XmlSinkFilename != null)
@@ -2288,6 +2315,20 @@ namespace Microsoft.Boogie
                 2 - print to stderr
   /restartProver
                 Restart the prover after each query
+  ---- Synthesis options --------------------------------------------------------
+  /tojson       Convert Boogie to Json
+  /synth        Enable synthesis
+  /synthGrammar:<file>        
+                Grammar file
+  /synthLog:<file>
+                Log input for the synthesis solvers.  Like filenames
+                supplied as arguments to other options, <file> can use the
+                following macros:
+                    @TIME@    expands to the current time
+                    @PREFIX@  expands to the concatenation of strings given
+                              by /logPrefix options
+                    @FILE@    expands to the last filename specified on the
+                              command line       
 ");
     }
   }

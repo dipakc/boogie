@@ -371,7 +371,16 @@ namespace Microsoft.Boogie
       SetRlimit(rlimit);
       SetRandomSeed(randomSeed);
       proverStart = DateTime.UtcNow;
-      thmProver.BeginCheck(descriptiveName, vc, handler);
+      
+      if (CommandLineOptions.Clo.Synth)
+      {
+        thmProver.BeginCheckSynthesis(descriptiveName, vc, handler);
+      }
+      else
+      {
+        thmProver.BeginCheck(descriptiveName, vc, handler);  
+      }
+      
       //  gen.ClearSharedFormulas();    PR: don't know yet what to do with this guy
 
       ProverTask = Task.Factory.StartNew(() => { WaitForOutput(null); }, TaskCreationOptions.LongRunning);
@@ -545,6 +554,8 @@ namespace Microsoft.Boogie
     }
 
     public abstract void BeginCheck(string descriptiveName, VCExpr vc, ErrorHandler handler);
+    
+    public abstract void BeginCheckSynthesis(string descriptiveName, VCExpr vc, ErrorHandler handler);
 
     public virtual Outcome CheckRPFP(string descriptiveName, RPFP vc, ErrorHandler handler,
       out RPFP.Node cex,
@@ -736,6 +747,14 @@ namespace Microsoft.Boogie
     }
 
     public override void BeginCheck(string descriptiveName, VCExpr vc, ErrorHandler handler)
+    {
+      /*Contract.Requires(descriptiveName != null);*/
+      //Contract.Requires(vc != null);
+      //Contract.Requires(handler != null);
+      throw new NotImplementedException();
+    }
+
+    public override void BeginCheckSynthesis(string descriptiveName, VCExpr vc, ErrorHandler handler)
     {
       /*Contract.Requires(descriptiveName != null);*/
       //Contract.Requires(vc != null);

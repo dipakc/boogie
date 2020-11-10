@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json;
 using System.Linq;
 using System.Collections;
 using System.Diagnostics;
@@ -292,6 +293,13 @@ namespace Microsoft.Boogie
       Contract.Requires(stream != null);
       stream.SetToken(this);
       this.topLevelDeclarations.Emit(stream);
+    }
+
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      stream.SetToken(this);
+      this.topLevelDeclarations.EmitJSON(stream, jsonWriter);
     }
 
     public void ProcessDatatypeConstructors(Errors errors)
@@ -1484,7 +1492,9 @@ namespace Microsoft.Boogie
 
   //---------------------------------------------------------------------
   // Declarations
-
+  /// <summary>
+  ///  <see cref="Microsoft.Boogie.Declaration.EmitJSON">
+  /// </summary>
   [ContractClass(typeof(DeclarationContracts))]
   public abstract class Declaration : Absy, ICarriesAttributes
   {
@@ -1504,6 +1514,20 @@ namespace Microsoft.Boogie
         kv.Emit(stream);
         stream.Write(" ");
       }
+    }
+
+    protected void EmitJSONAttributes(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      
+      jsonWriter.WriteStartArray();
+
+      for (QKeyValue kv = this.Attributes; kv != null; kv = kv.Next)
+      {
+        kv.EmitJSON(stream, jsonWriter);
+      }
+      
+      jsonWriter.WriteEndArray();
     }
 
     protected void ResolveAttributes(ResolutionContext rc)
@@ -1639,6 +1663,9 @@ namespace Microsoft.Boogie
     }
 
     public abstract void Emit(TokenTextWriter /*!*/ stream, int level);
+
+    public abstract void EmitJSON(TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, int level);
+
     public abstract void Register(ResolutionContext /*!*/ rc);
 
     /// <summary>
@@ -1765,6 +1792,20 @@ namespace Microsoft.Boogie
       stream.WriteLine(";");
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      if (Comment != null)
+      {
+        stream.WriteLine(this, level, "// " + Comment);
+      }
+
+      stream.Write(this, level, "axiom ");
+      EmitAttributes(stream);
+      this.Expr.EmitJSON(stream, jsonWriter);
+      stream.WriteLine(";");
+    }
+
     public override void Register(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -1836,6 +1877,7 @@ namespace Microsoft.Boogie
         {
           tl = CommandLineOptions.Clo.TimeLimit;
         }
+
         return tl;
       }
     }
@@ -1850,6 +1892,7 @@ namespace Microsoft.Boogie
         {
           rl = CommandLineOptions.Clo.ResourceLimit;
         }
+
         return rl;
       }
     }
@@ -1863,10 +1906,11 @@ namespace Microsoft.Boogie
         {
           return rs;
         }
+
         return null;
       }
     }
-    
+
     public NamedDeclaration(IToken /*!*/ tok, string /*!*/ name)
       : base(tok)
     {
@@ -1909,6 +1953,17 @@ namespace Microsoft.Boogie
       //Contract.Requires(stream != null);
       stream.Write(this, level, "type ");
       EmitAttributes(stream);
+      stream.Write("{0}", TokenTextWriter.SanitizeIdentifier(Name));
+      for (int i = 0; i < Arity; ++i)
+        stream.Write(" _");
+      stream.WriteLine(";");
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      stream.Write(this, level, "type ");
+      EmitJSONAttributes(stream, jsonWriter);
       stream.Write("{0}", TokenTextWriter.SanitizeIdentifier(Name));
       for (int i = 0; i < Arity; ++i)
         stream.Write(" _");
@@ -2053,6 +2108,20 @@ namespace Microsoft.Boogie
       TypeParameters.Emit(stream, " ");
       stream.Write(" = ");
       Body.Emit(stream);
+      stream.WriteLine(";");
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      stream.Write(this, level, "type ");
+      EmitJSONAttributes(stream, jsonWriter);
+      stream.Write("{0}", TokenTextWriter.SanitizeIdentifier(Name));
+      if (TypeParameters.Count > 0)
+        stream.Write(" ");
+      TypeParameters.EmitJSON(stream, jsonWriter, " ");
+      stream.Write(" = ");
+      Body.EmitJSON(stream, jsonWriter);
       stream.WriteLine(";");
     }
 
@@ -2273,6 +2342,14 @@ namespace Microsoft.Boogie
       stream.WriteLine(";");
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      stream.Write(this, level, "var ");
+      EmitJSONVitals(stream, jsonWriter, level, true);
+      stream.WriteLine(";");
+    }
+
     public void EmitVitals(TokenTextWriter stream, int level, bool emitAttributes, bool emitType = true)
     {
       Contract.Requires(stream != null);
@@ -2288,6 +2365,31 @@ namespace Microsoft.Boogie
       }
 
       this.TypedIdent.Emit(stream, emitType);
+    }
+
+    public void EmitJSONVitals(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level, bool emitAttributes,
+      bool emitType = true)
+    {
+      Contract.Requires(stream != null);
+      
+      jsonWriter.WriteStartObject();
+      if (emitAttributes)
+      {
+        jsonWriter.WritePropertyName("Attributes");
+        EmitJSONAttributes(stream, jsonWriter);
+      }
+
+      if (CommandLineOptions.Clo.PrintWithUniqueASTIds && this.TypedIdent.HasName)
+      {
+        jsonWriter.WritePropertyName("HashCode");
+        jsonWriter.WriteStringValue(string.Format("h{0}^^",
+          this.GetHashCode())); // the idea is that this will prepend the name printed by TypedIdent.Emit
+      }
+
+      jsonWriter.WritePropertyName("TypedIdent");
+      this.TypedIdent.EmitJSON(stream, jsonWriter, emitType);
+      
+      jsonWriter.WriteEndObject();
     }
 
     public override void Resolve(ResolutionContext rc)
@@ -2454,6 +2556,40 @@ namespace Microsoft.Boogie
           if (p.Unique)
             stream.Write(this, level, "unique ");
           p.Parent.Emit(stream);
+        }
+
+        if (ChildrenComplete)
+          stream.Write(this, level, " complete");
+      }
+
+      stream.WriteLine(";");
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      stream.Write(this, level, "const ");
+      EmitJSONAttributes(stream, jsonWriter);
+      if (this.Unique)
+      {
+        stream.Write(this, level, "unique ");
+      }
+
+      EmitJSONVitals(stream, jsonWriter, level, false);
+
+      if (Parents != null || ChildrenComplete)
+      {
+        stream.Write(this, level, " extends");
+        string /*!*/
+          sep = " ";
+        foreach (ConstantParent /*!*/ p in cce.NonNull(Parents))
+        {
+          Contract.Assert(p != null);
+          stream.Write(this, level, sep);
+          sep = ", ";
+          if (p.Unique)
+            stream.Write(this, level, "unique ");
+          p.Parent.EmitJSON(stream, jsonWriter);
         }
 
         if (ChildrenComplete)
@@ -2985,6 +3121,33 @@ namespace Microsoft.Boogie
       stream.pop();
     }
 
+    protected void EmitJSONSignature(TokenTextWriter stream, Utf8JsonWriter jsonWriter, bool shortRet)
+    {
+      Contract.Requires(stream != null);
+      
+      jsonWriter.WriteStartObject();
+      jsonWriter.WritePropertyName("TypeParameters");
+      Type.EmitJSONOptionalTypeParams(stream, jsonWriter, TypeParameters);
+
+      jsonWriter.WritePropertyName("InParams");
+      InParams.EmitJSON(stream, jsonWriter, true);
+
+      if (shortRet)
+      {
+        Contract.Assert(OutParams.Count == 1);
+        stream.Write(" : ");
+        cce.NonNull(OutParams[0]).TypedIdent.Type.EmitJSON(stream, jsonWriter);
+      }
+      else if (OutParams.Count > 0)
+      {
+        stream.Write(" returns (");
+        OutParams.EmitJSON(stream, jsonWriter, true);
+        stream.Write(")");
+      }
+
+      jsonWriter.WriteEndObject();
+    }
+
     // Register all type parameters at the resolution context
     protected void RegisterTypeParameters(ResolutionContext rc)
     {
@@ -3143,6 +3306,10 @@ namespace Microsoft.Boogie
     }
 
     public override void Emit(TokenTextWriter stream, int level)
+    {
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
     {
     }
   }
@@ -3322,6 +3489,70 @@ namespace Microsoft.Boogie
         stream.WriteLine("{");
         stream.Write(level + 1, "");
         DefinitionBody.Args[1].Emit(stream);
+        stream.WriteLine();
+        stream.WriteLine("}");
+      }
+      else
+      {
+        stream.WriteLine(";");
+      }
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      if (Comment != null)
+      {
+        stream.WriteLine(this, level, "// " + Comment);
+      }
+
+      stream.Write(this, level, "function ");
+      EmitJSONAttributes(stream, jsonWriter);
+      if (Body != null && !QKeyValue.FindBoolAttribute(Attributes, "inline"))
+      {
+        Contract.Assert(DefinitionBody == null);
+        // Boogie inlines any function whose .Body field is non-null.  The parser populates the .Body field
+        // if the :inline attribute is present, but if someone creates the Boogie file directly as an AST, then
+        // the :inline attribute may not be there.  We'll make sure it's printed, so one can see that this means
+        // that the body will be inlined.
+        stream.Write("{:inline} ");
+      }
+
+      if (DefinitionBody != null && !QKeyValue.FindBoolAttribute(Attributes, "define"))
+      {
+        // Boogie defines any function whose .DefinitionBody field is non-null.  The parser populates the .DefinitionBody field
+        // if the :define attribute is present, but if someone creates the Boogie file directly as an AST, then
+        // the :define attribute may not be there.  We'll make sure it's printed, so one can see that this means
+        // that the function will be defined.
+        stream.Write("{:define} ");
+      }
+
+      if (CommandLineOptions.Clo.PrintWithUniqueASTIds)
+      {
+        stream.Write("h{0}^^{1}", this.GetHashCode(), TokenTextWriter.SanitizeIdentifier(this.Name));
+      }
+      else
+      {
+        stream.Write("{0}", TokenTextWriter.SanitizeIdentifier(this.Name));
+      }
+
+      EmitJSONSignature(stream, jsonWriter, true);
+      if (Body != null)
+      {
+        Contract.Assert(DefinitionBody == null);
+        stream.WriteLine();
+        stream.WriteLine("{");
+        stream.Write(level + 1, "");
+        Body.EmitJSON(stream, jsonWriter);
+        stream.WriteLine();
+        stream.WriteLine("}");
+      }
+      else if (DefinitionBody != null)
+      {
+        stream.WriteLine();
+        stream.WriteLine("{");
+        stream.Write(level + 1, "");
+        DefinitionBody.Args[1].EmitJSON(stream, jsonWriter);
         stream.WriteLine();
         stream.WriteLine("}");
       }
@@ -3610,6 +3841,20 @@ namespace Microsoft.Boogie
       stream.WriteLine(";");
     }
 
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      Contract.Requires(stream != null);
+      if (Comment != null)
+      {
+        stream.WriteLine(this, level, "// " + Comment);
+      }
+
+      stream.Write(this, level, "{0}requires ", Free ? "free " : "");
+      Cmd.EmitJSONAttributes(stream, jsonWriter, Attributes);
+      this.Condition.EmitJSON(stream, jsonWriter);
+      stream.WriteLine(";");
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -3733,6 +3978,20 @@ namespace Microsoft.Boogie
       stream.WriteLine(";");
     }
 
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      Contract.Requires(stream != null);
+      if (Comment != null)
+      {
+        stream.WriteLine(this, level, "// " + Comment);
+      }
+
+      stream.Write(this, level, "{0}ensures ", Free ? "free " : "");
+      Cmd.EmitJSONAttributes(stream, jsonWriter, Attributes);
+      this.Condition.EmitJSON(stream, jsonWriter);
+      stream.WriteLine(";");
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -3842,6 +4101,53 @@ namespace Microsoft.Boogie
 
       stream.WriteLine();
       stream.WriteLine();
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      jsonWriter.WriteStartObject();
+      jsonWriter.WriteString("ObjType", "Procedure");
+
+      jsonWriter.WriteString("Name", TokenTextWriter.SanitizeIdentifier(this.Name));
+
+      jsonWriter.WritePropertyName("Attributes");
+      EmitJSONAttributes(stream, jsonWriter);
+      
+      jsonWriter.WritePropertyName("Signature");
+      EmitJSONSignature(stream, jsonWriter, false);
+
+
+      if (this.Modifies.Count > 0)
+      {
+        jsonWriter.WritePropertyName("Requires");
+        jsonWriter.WriteStartArray();
+
+        foreach (Requires /*!*/ e in this.Requires)
+        {
+          Contract.Assert(e != null);
+          e.EmitJSON(stream, jsonWriter, level);
+        }
+
+        jsonWriter.WriteEndArray();
+      }
+
+      if (this.Modifies.Count > 0)
+      {
+        jsonWriter.WritePropertyName("Modifies");
+        this.Modifies.EmitJSON(stream, jsonWriter, false);
+      }
+
+      if (this.Ensures.Count > 0)
+      {
+        jsonWriter.WritePropertyName("Ensures");
+        foreach (Ensures /*!*/ e in this.Ensures)
+        {
+          Contract.Assert(e != null);
+          e.EmitJSON(stream, jsonWriter, level);
+        }
+      }
+
+      jsonWriter.WriteEndObject(); //Procedure
     }
 
     public override void Register(ResolutionContext rc)
@@ -4433,6 +4739,61 @@ namespace Microsoft.Boogie
         foreach (Block b in this.Blocks)
         {
           b.Emit(stream, level + 1);
+        }
+      }
+
+      stream.WriteLine(level, "{0}", '}');
+
+      stream.WriteLine();
+      stream.WriteLine();
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      stream.Write(this, level, "implementation ");
+      EmitJSONAttributes(stream, jsonWriter);
+      stream.Write(this, level, "{0}", TokenTextWriter.SanitizeIdentifier(this.Name));
+      EmitJSONSignature(stream, jsonWriter, false);
+      stream.WriteLine();
+
+      stream.WriteLine(level, "{0}", '{');
+
+      foreach (Variable /*!*/ v in this.LocVars)
+      {
+        Contract.Assert(v != null);
+        v.EmitJSON(stream, jsonWriter, level + 1);
+      }
+
+      if (this.StructuredStmts != null && !CommandLineOptions.Clo.PrintInstrumented &&
+          !CommandLineOptions.Clo.PrintInlined)
+      {
+        if (this.LocVars.Count > 0)
+        {
+          stream.WriteLine();
+        }
+
+        if (CommandLineOptions.Clo.PrintUnstructured < 2)
+        {
+          if (CommandLineOptions.Clo.PrintUnstructured == 1)
+          {
+            stream.WriteLine(this, level + 1, "/*** structured program:");
+          }
+
+          this.StructuredStmts.EmitJSON(stream, jsonWriter, level + 1);
+          if (CommandLineOptions.Clo.PrintUnstructured == 1)
+          {
+            stream.WriteLine(level + 1, "**** end structured program */");
+          }
+        }
+      }
+
+      if (this.StructuredStmts == null || 1 <= CommandLineOptions.Clo.PrintUnstructured ||
+          CommandLineOptions.Clo.PrintInstrumented || CommandLineOptions.Clo.PrintInlined)
+      {
+        foreach (Block b in this.Blocks)
+        {
+          b.EmitJSON(stream, jsonWriter, level + 1);
         }
       }
 
@@ -5065,6 +5426,41 @@ namespace Microsoft.Boogie
       stream.pop();
     }
 
+    /// <summary>
+    /// An "emitType" value of "false" is ignored if "this.Name" is "NoName".
+    /// </summary>
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, bool emitType)
+    {
+      Contract.Requires(stream != null);
+      stream.SetToken(this);
+      
+      jsonWriter.WriteStartObject();
+      jsonWriter.WriteString("ObjType", "TypedIdent");
+      if (this.Name != NoName && emitType)
+      {
+        jsonWriter.WriteString("Name", TokenTextWriter.SanitizeIdentifier(this.Name));
+        jsonWriter.WritePropertyName("Type");
+        this.Type.EmitJSON(stream, jsonWriter);
+      }
+      else if (this.Name != NoName)
+      {
+        jsonWriter.WriteString("Name", TokenTextWriter.SanitizeIdentifier(this.Name));
+      }
+      else
+      {
+        jsonWriter.WritePropertyName("Type");
+        this.Type.EmitJSON(stream, jsonWriter);
+      }
+
+      if (this.WhereExpr != null)
+      {
+        jsonWriter.WritePropertyName("Where");
+        this.WhereExpr.EmitJSON(stream, jsonWriter);
+      }
+      jsonWriter.WriteEndObject();
+      
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -5236,6 +5632,117 @@ namespace Microsoft.Boogie
     }
   }
 
+  public static class EmitterJSON
+  {
+    public static void EmitJSON(this List<Declaration /*!*/> /*!*/ decls, TokenTextWriter stream,
+      Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      Contract.Requires(cce.NonNullElements(decls));
+
+      jsonWriter.WriteStartArray();
+      foreach (Declaration d in decls)
+      {
+        if (d == null)
+          continue;
+        
+        d.EmitJSON(stream, jsonWriter, 0);
+        jsonWriter.Flush(); //TODO: Remove this;
+      }
+      jsonWriter.WriteEndArray();
+    }
+
+    public static void EmitJSON(this List<String> ss, TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      jsonWriter.WriteStartArray();
+      foreach (string /*!*/ s in ss)
+      {
+        Contract.Assert(s != null);
+        jsonWriter.WriteStringValue(s);
+      }
+      jsonWriter.WriteEndArray();
+    }
+
+    public static void EmitJSON(this IList<Expr> ts, TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      jsonWriter.WriteStartArray();
+      foreach (Expr /*!*/ e in ts)
+      {
+        Contract.Assert(e != null);
+        e.EmitJSON(stream, jsonWriter);
+      }
+      jsonWriter.WriteEndArray();
+    }
+
+    public static void EmitJSON(this List<IdentifierExpr> ids, TokenTextWriter stream, Utf8JsonWriter jsonWriter,
+      bool printWhereComments)
+    {
+      Contract.Requires(stream != null);
+      jsonWriter.WriteStartArray();
+      foreach (IdentifierExpr /*!*/ e in ids)
+      {
+        Contract.Assert(e != null);
+        jsonWriter.WriteStartObject();
+        jsonWriter.WritePropertyName("ID");
+        e.EmitJSON(stream, jsonWriter);
+
+        if (printWhereComments && e.Decl != null && e.Decl.TypedIdent.WhereExpr != null)
+        {
+          jsonWriter.WritePropertyName("WhereComment");
+          e.Decl.TypedIdent.WhereExpr.EmitJSON(stream, jsonWriter);
+        }
+        jsonWriter.WriteEndObject();
+      }
+      jsonWriter.WriteEndArray();
+    }
+
+    public static void EmitJSON(this List<Variable> vs, TokenTextWriter stream, Utf8JsonWriter jsonWriter,
+      bool emitAttributes)
+    {
+      Contract.Requires(stream != null);
+      
+      jsonWriter.WriteStartArray();
+      foreach (Variable /*!*/ v in vs)
+      {
+        Contract.Assert(v != null);
+        v.EmitJSONVitals(stream, jsonWriter, 0, emitAttributes);
+      }
+
+      jsonWriter.WriteEndArray();
+    }
+
+    public static void EmitJSON(this List<Type> tys, TokenTextWriter stream, Utf8JsonWriter jsonWriter,
+      string separator)
+    {
+      Contract.Requires(separator != null);
+      Contract.Requires(stream != null);
+      jsonWriter.WriteStartArray();
+      foreach (Type /*!*/ v in tys)
+      {
+        Contract.Assert(v != null);
+        v.EmitJSON(stream, jsonWriter);
+      }
+      jsonWriter.WriteEndArray();
+    }
+
+    public static void EmitJSON(this List<TypeVariable> tvs, TokenTextWriter stream, Utf8JsonWriter jsonWriter,
+      string separator)
+    {
+      Contract.Requires(separator != null);
+      Contract.Requires(stream != null);
+      jsonWriter.WriteStartArray();
+      foreach (TypeVariable /*!*/ v in tvs)
+      {
+        Contract.Assert(v != null);
+        
+        v.EmitJSON(stream, jsonWriter);
+      }
+      jsonWriter.WriteEndArray();
+    }
+  }
+
   #endregion
 
 
@@ -5303,6 +5810,11 @@ namespace Microsoft.Boogie
     {
       //Contract.Requires(stream != null);
       b.Emit(stream, level);
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement AtomicRE.EmitJSON");
     }
 
     public override Absy StdDispatch(StandardVisitor visitor)
@@ -5388,6 +5900,11 @@ namespace Microsoft.Boogie
       second.Emit(stream, level + 1);
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement Sequential.EmitJSON");
+    }
+
     public override Absy StdDispatch(StandardVisitor visitor)
     {
       //Contract.Requires(visitor != null);
@@ -5438,6 +5955,11 @@ namespace Microsoft.Boogie
         Contract.Assert(r != null);
         r.Emit(stream, level + 1);
       }
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement Choice.EmitJSON");
     }
 
     public override Absy StdDispatch(StandardVisitor visitor)

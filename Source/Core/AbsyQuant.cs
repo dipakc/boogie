@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Diagnostics.Contracts;
+using System.Text.Json;
 using Set = Microsoft.Boogie.GSet<object>;
 
 namespace Microsoft.Boogie
@@ -171,7 +172,16 @@ namespace Microsoft.Boogie
       Contract.Requires(stream != null);
     }
 
+    protected virtual void EmitJSONTypeHint(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+    }
+
     protected virtual void EmitTriggers(TokenTextWriter stream)
+    {
+      Contract.Requires(stream != null);
+    }
+    protected virtual void EmitJSONTriggers(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
     {
       Contract.Requires(stream != null);
     }
@@ -197,6 +207,31 @@ namespace Microsoft.Boogie
       stream.sep();
 
       this.Body.Emit(stream);
+      stream.Write(")");
+      stream.pop();
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      stream.push();
+      stream.Write(this, "({0}", Kind.ToString().ToLower());
+      this.EmitJSONTypeHint(stream, jsonWriter);
+      Type.EmitJSONOptionalTypeParams(stream, jsonWriter, TypeParameters);
+      stream.Write(this, " ");
+      this.Dummies.EmitJSON(stream, jsonWriter, true);
+      stream.Write(" :: ");
+      stream.sep();
+      for (QKeyValue kv = this.Attributes; kv != null; kv = kv.Next)
+      {
+        kv.EmitJSON(stream, jsonWriter);
+        stream.Write(" ");
+      }
+
+      this.EmitJSONTriggers(stream, jsonWriter);
+      stream.sep();
+
+      this.Body.EmitJSON(stream, jsonWriter);
       stream.Write(")");
       stream.pop();
     }
@@ -391,6 +426,31 @@ namespace Microsoft.Boogie
         else
         {
           ((Expr) p).Emit(stream);
+        }
+      }
+
+      stream.Write("}");
+    }
+
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      stream.Write("{:");
+      stream.Write(Key);
+      string sep = " ";
+      foreach (object p in Params)
+      {
+        stream.Write(sep);
+        sep = ", ";
+        if (p is string)
+        {
+          stream.Write("\"");
+          stream.Write((string) p);
+          stream.Write("\"");
+        }
+        else
+        {
+          ((Expr) p).EmitJSON(stream, jsonWriter);
         }
       }
 
@@ -629,6 +689,24 @@ namespace Microsoft.Boogie
       stream.Write(" }");
     }
 
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      stream.SetToken(this);
+      Contract.Assert(this.Tr.Count >= 1);
+      string /*!*/
+        sep = Pos ? "{ " : "{:nopats ";
+      foreach (Expr /*!*/ e in this.Tr)
+      {
+        Contract.Assert(e != null);
+        stream.Write(sep);
+        sep = ", ";
+        e.EmitJSON(stream, jsonWriter);
+      }
+
+      stream.Write(" }");
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -855,6 +933,20 @@ namespace Microsoft.Boogie
       for (Trigger tr = this.Triggers; tr != null; tr = tr.Next)
       {
         tr.Emit(stream);
+        stream.Write(" ");
+        stream.sep();
+      }
+
+      stream.pop();
+    }
+
+    protected override void EmitJSONTriggers(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      //Contract.Requires(stream != null);
+      stream.push();
+      for (Trigger tr = this.Triggers; tr != null; tr = tr.Next)
+      {
+        tr.EmitJSON(stream, jsonWriter);
         stream.Write(" ");
         stream.sep();
       }
@@ -1379,6 +1471,41 @@ namespace Microsoft.Boogie
       stream.sep();
 
       this.Body.Emit(stream);
+      stream.Write(")");
+      stream.pop();
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      stream.push();
+      stream.Write(this, "(var ");
+
+      string sep = "";
+      stream.push();
+      foreach (var v in Dummies)
+      {
+        stream.Write("{0}", sep);
+        v.EmitJSONVitals(stream, jsonWriter, 0, true, false);
+        sep = ", ";
+        stream.sep();
+      }
+
+      stream.pop();
+
+      stream.Write(" := ");
+      this.Rhss.EmitJSON(stream, jsonWriter);
+      stream.Write("; ");
+      stream.sep();
+      for (QKeyValue kv = this.Attributes; kv != null; kv = kv.Next)
+      {
+        kv.EmitJSON(stream, jsonWriter);
+        stream.Write(" ");
+      }
+
+      stream.sep();
+
+      this.Body.EmitJSON(stream, jsonWriter);
       stream.Write(")");
       stream.pop();
     }

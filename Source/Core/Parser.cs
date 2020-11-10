@@ -21,6 +21,7 @@ using Bpl = Microsoft.Boogie;
 using System;
 using System.Diagnostics.Contracts;
 using System.Reflection;
+using System.Text.Json;
 
 namespace Microsoft.Boogie {
 
@@ -155,6 +156,12 @@ private class BvBounds : Expr {
                             int contextBindingStrength, bool fragileContext) {
     Contract.Assert(false);throw new cce.UnreachableException();
   }
+  public override void EmitJSON(TokenTextWriter/*!*/ stream,
+	  Utf8JsonWriter jsonWriter,
+	  int contextBindingStrength, bool fragileContext) {
+	  Contract.Assert(false);throw new cce.UnreachableException();
+  }
+
   public override void ComputeFreeVariables(GSet<object>/*!*/ freeVars) { Contract.Assert(false);throw new cce.UnreachableException(); }
   public override int ComputeHashCode()
   {

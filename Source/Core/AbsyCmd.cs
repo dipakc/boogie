@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
 using System.Diagnostics.Contracts;
+using System.Text.Json;
 using Set = Microsoft.Boogie.GSet<object>;
 
 namespace Microsoft.Boogie
@@ -123,6 +124,34 @@ namespace Microsoft.Boogie
         this.tc.Emit(stream, level + 1);
       }
     }
+
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      Contract.Requires(stream != null);
+      if (!Anonymous)
+      {
+        stream.WriteLine(level, "{0}:",
+          CommandLineOptions.Clo.PrintWithUniqueASTIds
+            ? String.Format("h{0}^^{1}", this.GetHashCode(), this.LabelName)
+            : this.LabelName);
+      }
+
+      foreach (Cmd /*!*/ c in this.simpleCmds)
+      {
+        Contract.Assert(c != null);
+        c.EmitJSON(stream, jsonWriter, level + 1);
+      }
+
+      if (this.ec != null)
+      {
+        this.ec.EmitJSON(stream, jsonWriter, level + 1);
+      }
+      else if (this.tc != null)
+      {
+        this.tc.EmitJSON(stream, jsonWriter, level + 1);
+      }
+    }
+
   }
 
   public class StmtList
@@ -196,6 +225,25 @@ namespace Microsoft.Boogie
         }
 
         b.Emit(stream, level);
+        needSeperator = true;
+      }
+    }
+
+    // prints the list of statements, not the surrounding curly braces
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      Contract.Requires(stream != null);
+      bool needSeperator = false;
+      foreach (BigBlock b in BigBlocks)
+      {
+        Contract.Assert(b != null);
+        Contract.Assume(cce.IsPeerConsistent(b));
+        if (needSeperator)
+        {
+          stream.WriteLine();
+        }
+
+        b.EmitJSON(stream, jsonWriter, level);
         needSeperator = true;
       }
     }
@@ -949,6 +997,8 @@ namespace Microsoft.Boogie
     }
 
     public abstract void Emit(TokenTextWriter /*!*/ stream, int level);
+    
+    public abstract void EmitJSON(TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, int level);
   }
 
   [ContractClassFor(typeof(StructuredCmd))]
@@ -1068,6 +1118,47 @@ namespace Microsoft.Boogie
         break;
       }
     }
+    
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.Write(level, "if (");
+      IfCmd /*!*/
+        ifcmd = this;
+      while (true)
+      {
+        if (ifcmd.Guard == null)
+        {
+          stream.Write("*");
+        }
+        else
+        {
+          ifcmd.Guard.EmitJSON(stream, jsonWriter);
+        }
+
+        stream.WriteLine(")");
+
+        stream.WriteLine(level, "{");
+        ifcmd.thn.EmitJSON(stream, jsonWriter, level + 1);
+        stream.WriteLine(level, "}");
+
+        if (ifcmd.elseIf != null)
+        {
+          stream.Write(level, "else if (");
+          ifcmd = ifcmd.elseIf;
+          continue;
+        }
+        else if (ifcmd.elseBlock != null)
+        {
+          stream.WriteLine(level, "else");
+          stream.WriteLine(level, "{");
+          ifcmd.elseBlock.EmitJSON(stream, jsonWriter, level + 1);
+          stream.WriteLine(level, "}");
+        }
+
+        break;
+      }
+    }
+
   }
 
   public class WhileCmd : StructuredCmd
@@ -1133,6 +1224,42 @@ namespace Microsoft.Boogie
       Body.Emit(stream, level + 1);
       stream.WriteLine(level, "}");
     }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.Write(level, "while (");
+      if (Guard == null)
+      {
+        stream.Write("*");
+      }
+      else
+      {
+        Guard.EmitJSON(stream, jsonWriter);
+      }
+
+      stream.WriteLine(")");
+
+      foreach (PredicateCmd inv in Invariants)
+      {
+        if (inv is AssumeCmd)
+        {
+          stream.Write(level + 1, "free invariant ");
+        }
+        else
+        {
+          stream.Write(level + 1, "invariant ");
+        }
+
+        Cmd.EmitJSONAttributes(stream, jsonWriter, inv.Attributes);
+        inv.Expr.EmitJSON(stream, jsonWriter);
+        stream.WriteLine(";");
+      }
+
+      stream.WriteLine(level, "{");
+      Body.EmitJSON(stream, jsonWriter, level + 1);
+      stream.WriteLine(level, "}");
+    }
+
   }
 
   public class BreakCmd : StructuredCmd
@@ -1158,6 +1285,19 @@ namespace Microsoft.Boogie
         stream.WriteLine(level, "break {0};", Label);
       }
     }
+    
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      if (Label == null)
+      {
+        stream.WriteLine(level, "break;");
+      }
+      else
+      {
+        stream.WriteLine(level, "break {0};", Label);
+      }
+    }
+
   }
 
   //---------------------------------------------------------------------
@@ -1308,6 +1448,29 @@ namespace Microsoft.Boogie
 
       Contract.Assume(this.TransferCmd != null);
       this.TransferCmd.Emit(stream, level + 1);
+    }
+
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      Contract.Requires(stream != null);
+      stream.WriteLine();
+      stream.WriteLine(
+        this,
+        level,
+        "{0}:{1}",
+        CommandLineOptions.Clo.PrintWithUniqueASTIds
+          ? String.Format("h{0}^^{1}", this.GetHashCode(), this.Label)
+          : this.Label,
+        this.widenBlock ? "  // cut point" : "");
+
+      foreach (Cmd /*!*/ c in this.Cmds)
+      {
+        Contract.Assert(c != null);
+        c.Emit(stream, level + 1);
+      }
+
+      Contract.Assume(this.TransferCmd != null);
+      this.TransferCmd.EmitJSON(stream, jsonWriter, level + 1);
     }
 
     public void Register(ResolutionContext rc)
@@ -1517,6 +1680,9 @@ namespace Microsoft.Boogie
     }
 
     public abstract void Emit(TokenTextWriter /*!*/ stream, int level);
+    
+    public abstract void EmitJSON(TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, int level);
+    
     public abstract void AddAssignedVariables(List<Variable> /*!*/ vars);
 
     public void CheckAssignments(TypecheckingContext tc)
@@ -1638,7 +1804,27 @@ namespace Microsoft.Boogie
         stream.Write(" ");
       }
     }
+    /// <summary>
+    /// This is a helper routine for printing a linked list of attributes.  Each attribute
+    /// is terminated by a space.
+    /// </summary>
+    public static void EmitJSONAttributes(TokenTextWriter stream, Utf8JsonWriter jsonWriter, QKeyValue attributes)
+    {
+      Contract.Requires(stream != null);
 
+      if (stream.UseForComputingChecksums)
+      {
+        return;
+      }
+
+      for (QKeyValue kv = attributes; kv != null; kv = kv.Next)
+      {
+        kv.EmitJSON(stream, jsonWriter);
+        stream.Write(" ");
+      }
+    }
+
+    
     public static void ResolveAttributes(QKeyValue attributes, ResolutionContext rc)
     {
       Contract.Requires(rc != null);
@@ -1683,6 +1869,11 @@ namespace Microsoft.Boogie
     {
       //Contract.Requires(stream != null);
       stream.WriteLine(this, level, "yield;");
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement YieldCmd.EmitJSON");
     }
 
     public override void Resolve(ResolutionContext rc)
@@ -1743,6 +1934,11 @@ namespace Microsoft.Boogie
       {
         stream.WriteLine(this, level, "// {0}", this.Comment);
       }
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement CommentCmd.EmitJSON");
     }
 
     public override void Resolve(ResolutionContext rc)
@@ -1877,6 +2073,11 @@ namespace Microsoft.Boogie
       }
 
       stream.WriteLine(";");
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement AssignCmd.EmitJSON");
     }
 
     public override void Resolve(ResolutionContext rc)
@@ -2439,6 +2640,11 @@ namespace Microsoft.Boogie
       stream.WriteLine(level, "}");
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement StateCmd.EmitJSON");
+    }
+
     public override Absy StdDispatch(StandardVisitor visitor)
     {
       //Contract.Requires(visitor != null);
@@ -2800,6 +3006,13 @@ namespace Microsoft.Boogie
       stream.WriteLine(";");
       base.Emit(stream, level);
     }
+    
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement ParCallCmd.EmitJSON");
+    }
+
+    
   }
 
   public class CallCmd : CallCommonality, IPotentialErrorNode<object, object>
@@ -2931,6 +3144,11 @@ namespace Microsoft.Boogie
 
       stream.WriteLine(");");
       base.Emit(stream, level);
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement CallCmd.EmitJSON");
     }
 
     public override void Resolve(ResolutionContext rc)
@@ -3747,6 +3965,14 @@ namespace Microsoft.Boogie
       stream.WriteLine(";");
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      stream.Write(this, level, "assert ");
+      EmitJSONAttributes(stream, jsonWriter, Attributes);
+      this.Expr.EmitJSON(stream, jsonWriter);
+      stream.WriteLine(";");
+    }
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -3949,6 +4175,11 @@ namespace Microsoft.Boogie
       stream.WriteLine(";");
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement AssumeCmd.EmitJSON");
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -4069,6 +4300,11 @@ namespace Microsoft.Boogie
       stream.WriteLine(";");
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      stream.WriteLine("JSON: Implement HavocCmd.EmitJSON");
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -4120,6 +4356,8 @@ namespace Microsoft.Boogie
     }
 
     public abstract void Emit(TokenTextWriter /*!*/ stream, int level);
+    
+    public abstract void EmitJSON(TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, int level);
 
     public override void Typecheck(TypecheckingContext tc)
     {
@@ -4163,6 +4401,12 @@ namespace Microsoft.Boogie
     }
 
     public override void Emit(TokenTextWriter stream, int level)
+    {
+      //Contract.Requires(stream != null);
+      stream.WriteLine(this, level, "return;");
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
     {
       //Contract.Requires(stream != null);
       stream.WriteLine(this, level, "return;");
@@ -4271,6 +4515,41 @@ namespace Microsoft.Boogie
       else
       {
         labelNames.Emit(stream);
+      }
+
+      stream.WriteLine(";");
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int level)
+    {
+      //Contract.Requires(stream != null);
+      Contract.Assume(this.labelNames != null);
+      stream.Write(this, level, "goto ");
+      if (CommandLineOptions.Clo.PrintWithUniqueASTIds)
+      {
+        if (labelTargets == null)
+        {
+          string sep = "";
+          foreach (string name in labelNames)
+          {
+            stream.Write("{0}{1}^^{2}", sep, "NoDecl", name);
+            sep = ", ";
+          }
+        }
+        else
+        {
+          string sep = "";
+          foreach (Block /*!*/ b in labelTargets)
+          {
+            Contract.Assert(b != null);
+            stream.Write("{0}h{1}^^{2}", sep, b.GetHashCode(), b.Label);
+            sep = ", ";
+          }
+        }
+      }
+      else
+      {
+        labelNames.EmitJSON(stream, jsonWriter);
       }
 
       stream.WriteLine(";");

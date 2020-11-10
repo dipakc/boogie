@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.Diagnostics.Contracts;
 using System.Linq;
+using System.Text.Json;
 using Microsoft.BaseTypes;
 using Set = Microsoft.Boogie.GSet<object>; // not that the set used is not a set of Variable only, as it also contains TypeVariables
 
@@ -34,6 +35,12 @@ namespace Microsoft.Boogie
       Emit(stream, 0, false);
     }
 
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      EmitJSON(stream, jsonWriter, 0, false);
+    }
+
     /// <summary>
     /// If true the client is making a promise that this Expr will be
     /// treated immutably (i.e. once constructed it is never changed).
@@ -59,6 +66,8 @@ namespace Microsoft.Boogie
     protected int CachedHashCode = 0;
 
     public abstract void Emit(TokenTextWriter /*!*/ wr, int contextBindingStrength, bool fragileContext);
+    
+    public abstract void EmitJSON(TokenTextWriter /*!*/ wr, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext);
 
     [Pure]
     public override string ToString()
@@ -838,6 +847,24 @@ namespace Microsoft.Boogie
       }
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      stream.SetToken(this);
+      if (this.Val is bool)
+      {
+        stream.Write((bool) this.Val ? "true" : "false"); // correct capitalization
+      }
+      else if (Type.IsString)
+      {
+        stream.Write("\"" + cce.NonNull(this.Val.ToString()) + "\"");
+      }
+      else
+      {
+        stream.Write(cce.NonNull(this.Val.ToString()));
+      }
+    }
+    
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -1213,6 +1240,17 @@ namespace Microsoft.Boogie
       stream.Write(this, "{0}", TokenTextWriter.SanitizeIdentifier(this.Name));
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      if (CommandLineOptions.Clo.PrintWithUniqueASTIds && !stream.UseForComputingChecksums)
+      {
+        stream.Write("{0}^^", this.Decl == null ? "NoDecl" : "h" + this.Decl.GetHashCode());
+      }
+
+      stream.Write(this, "{0}", TokenTextWriter.SanitizeIdentifier(this.Name));
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -1398,6 +1436,14 @@ namespace Microsoft.Boogie
       stream.Write(")");
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      stream.Write(this, "old(");
+      this.Expr.EmitJSON(stream, jsonWriter);
+      stream.Write(")");
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -1525,6 +1571,17 @@ namespace Microsoft.Boogie
     /// <param name="fragileContext"></param>
     void Emit(IList<Expr> /*!*/ args, TokenTextWriter /*!*/ stream, int contextBindingStrength, bool fragileContext);
 
+    /// <summary>
+    /// Emits to "stream" the operator applied to the given arguments.
+    /// The length of "args" can be anything that the parser allows for this appliable operator
+    /// (but can be nothing else).
+    /// </summary>
+    /// <param name="args"></param>
+    /// <param name="stream"></param>
+    /// <param name="contextBindingStrength"></param>
+    /// <param name="fragileContext"></param>
+    void EmitJSON(IList<Expr> /*!*/ args, TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext);
+
     void Resolve(ResolutionContext /*!*/ rc, Expr /*!*/ subjectForErrorReporting);
 
     /// <summary>
@@ -1560,6 +1617,7 @@ namespace Microsoft.Boogie
   [ContractClassFor(typeof(IAppliable))]
   abstract class IAppliableContracts : IAppliable
   {
+  
     #region IAppliable Members
 
     public string FunctionName
@@ -1572,6 +1630,13 @@ namespace Microsoft.Boogie
     }
 
     public void Emit(IList<Expr> args, TokenTextWriter stream, int contextBindingStrength, bool fragileContext)
+    {
+      Contract.Requires(args != null);
+      Contract.Requires(stream != null);
+      throw new NotImplementedException();
+    }
+
+    public void EmitJSON(IList<Expr> args, TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
     {
       Contract.Requires(args != null);
       Contract.Requires(stream != null);
@@ -1732,6 +1797,30 @@ namespace Microsoft.Boogie
 
       stream.Write(FunctionName);
       cce.NonNull(args[0]).Emit(stream, opBindingStrength, false);
+      if (parensNeeded)
+      {
+        stream.Write(")");
+      }
+    }
+
+    public void EmitJSON(IList<Expr> args, TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      //Contract.Requires(args != null);
+      stream.SetToken(ref this.tok);
+      Contract.Assert(args.Count == 1);
+      // determine if parens are needed
+      int opBindingStrength = 0x70;
+      bool parensNeeded = opBindingStrength < contextBindingStrength ||
+                          (fragileContext && opBindingStrength == contextBindingStrength);
+
+      if (parensNeeded)
+      {
+        stream.Write("(");
+      }
+
+      stream.Write(FunctionName);
+      cce.NonNull(args[0]).EmitJSON(stream, jsonWriter, opBindingStrength, false);
       if (parensNeeded)
       {
         stream.Write(")");
@@ -2066,6 +2155,97 @@ namespace Microsoft.Boogie
       stream.sep();
       stream.Write(" {0} ", FunctionName);
       cce.NonNull(args[1]).Emit(stream, opBindingStrength, fragileRightContext);
+      if (parensNeeded)
+      {
+        stream.Write(")");
+      }
+
+      stream.pop(pop);
+    }
+
+    public void EmitJSON(IList<Expr> args, TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      //Contract.Requires(args != null);
+      stream.SetToken(ref this.tok);
+      Contract.Assert(args.Count == 2);
+      // determine if parens are needed
+      int opBindingStrength;
+      bool fragileLeftContext = false; // false means "allow same binding power on left without parens"
+      bool fragileRightContext = false; // false means "allow same binding power on right without parens"
+      switch (this.op)
+      {
+        case Opcode.Add:
+          opBindingStrength = 0x40;
+          break;
+        case Opcode.Sub:
+          opBindingStrength = 0x40;
+          fragileRightContext = true;
+          break;
+        case Opcode.Mul:
+          opBindingStrength = 0x50;
+          break;
+        case Opcode.Div:
+          opBindingStrength = 0x50;
+          fragileRightContext = true;
+          break;
+        case Opcode.Mod:
+          opBindingStrength = 0x50;
+          fragileRightContext = true;
+          break;
+        case Opcode.RealDiv:
+          opBindingStrength = 0x50;
+          fragileRightContext = true;
+          break;
+        case Opcode.Pow:
+          opBindingStrength = 0x60;
+          fragileRightContext = true;
+          break;
+        case Opcode.Eq:
+        case Opcode.Neq:
+        case Opcode.Gt:
+        case Opcode.Ge:
+        case Opcode.Lt:
+        case Opcode.Le:
+        case Opcode.Subtype:
+          opBindingStrength = 0x30;
+          fragileLeftContext = fragileRightContext = true;
+          break;
+        case Opcode.And:
+          opBindingStrength = 0x20;
+          break;
+        case Opcode.Or:
+          opBindingStrength = 0x21;
+          break;
+        case Opcode.Imp:
+          opBindingStrength = 0x10;
+          fragileLeftContext = true;
+          break;
+        case Opcode.Iff:
+          opBindingStrength = 0x00;
+          break;
+        default:
+          System.Diagnostics.Debug.Fail("unknown binary operator: " + op.ToString());
+          opBindingStrength =
+            -1; // to please compiler, which refuses to consider whether or not all enumeration cases have been considered!
+          break;
+      }
+
+      int opBS = opBindingStrength & 0xF0;
+      int ctxtBS = contextBindingStrength & 0xF0;
+      bool parensNeeded = opBS < ctxtBS ||
+                          (opBS == ctxtBS && (opBindingStrength != contextBindingStrength || fragileContext));
+
+      var pop = stream.push(FunctionName);
+      if (parensNeeded)
+      {
+        stream.Write("(");
+      }
+
+      cce.NonNull(args[0]).EmitJSON(stream, jsonWriter, opBindingStrength, fragileLeftContext);
+      stream.sep();
+      stream.Write(" {0} ", FunctionName);
+      cce.NonNull(args[1]).EmitJSON(stream, jsonWriter, opBindingStrength, fragileRightContext);
       if (parensNeeded)
       {
         stream.Write(")");
@@ -2646,6 +2826,34 @@ namespace Microsoft.Boogie
       stream.Write(")");
     }
 
+    virtual public void EmitJSON(IList<Expr> args, TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      //Contract.Requires(args != null);
+
+      if (stream.UseForComputingChecksums && Func.OriginalLambdaExprAsString != null)
+      {
+        stream.Write(Func.OriginalLambdaExprAsString);
+      }
+      else
+      {
+        this.name.EmitJSON(stream, jsonWriter, 0xF0, false);
+      }
+
+      if (stream.UseForComputingChecksums)
+      {
+        var c = Func.DependencyChecksum;
+        if (c != null)
+        {
+          stream.Write(string.Format("[dependency_checksum:{0}]", c));
+        }
+      }
+
+      stream.Write("(");
+      args.EmitJSON(stream, jsonWriter);
+      stream.Write(")");
+    }
+
     public void Resolve(ResolutionContext rc, Expr subjectForErrorReporting)
     {
       //Contract.Requires(subjectForErrorReporting != null);
@@ -2808,6 +3016,29 @@ namespace Microsoft.Boogie
         stream.Write(")");
     }
 
+    public void EmitJSON(IList<Expr> /*!*/ args, TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, 
+      int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(args != null);
+      //Contract.Requires(stream != null);
+      stream.SetToken(ref this.tok);
+      Contract.Assert(args.Count == 1);
+      // determine if parens are needed
+      int opBindingStrength = 0x80;
+      bool parensNeeded = opBindingStrength < contextBindingStrength ||
+                          (fragileContext && opBindingStrength == contextBindingStrength);
+
+      if (parensNeeded)
+        stream.Write("(");
+
+      cce.NonNull(args[0]).Emit(stream, opBindingStrength, false);
+      stream.Write("{0} ", FunctionName);
+      Type.EmitJSON(stream, jsonWriter, 0);
+
+      if (parensNeeded)
+        stream.Write(")");
+    }
+
     public void Resolve(ResolutionContext rc, Expr subjectForErrorReporting)
     {
       //Contract.Requires(subjectForErrorReporting != null);
@@ -2933,6 +3164,16 @@ namespace Microsoft.Boogie
       stream.Write(this.name);
       stream.Write("(");
       args.Emit(stream);
+      stream.Write(")");
+    }
+
+    virtual public void EmitJSON(IList<Expr> args, TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      //Contract.Requires(args != null);
+      stream.Write(this.name);
+      stream.Write("(");
+      args.EmitJSON(stream, jsonWriter);
       stream.Write(")");
     }
 
@@ -3100,6 +3341,13 @@ namespace Microsoft.Boogie
       Fun.Emit(Args, stream, contextBindingStrength, fragileContext);
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      stream.SetToken(this);
+      Fun.EmitJSON(Args, stream, jsonWriter, contextBindingStrength, fragileContext);
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -3249,6 +3497,15 @@ namespace Microsoft.Boogie
       Emit(args, stream, contextBindingStrength, fragileContext, false);
     }
 
+    public void EmitJSON(IList<Expr> /*!*/ args, TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, 
+      int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(args != null);
+      //Contract.Requires(stream != null);
+      Contract.Assume(args.Count == Arity + 1);
+      EmitJSON(args, stream, jsonWriter, contextBindingStrength, fragileContext, false);
+    }
+
     public static void Emit(IList<Expr> /*!*/ args, TokenTextWriter /*!*/ stream,
       int contextBindingStrength, bool fragileContext,
       bool withRhs)
@@ -3280,6 +3537,46 @@ namespace Microsoft.Boogie
       {
         stream.Write(" := ");
         cce.NonNull(args.Last()).Emit(stream);
+      }
+
+      stream.Write("]");
+      if (parensNeeded)
+      {
+        stream.Write(")");
+      }
+    }
+
+    public static void EmitJSON(IList<Expr> /*!*/ args, TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, 
+      int contextBindingStrength, bool fragileContext,
+      bool withRhs)
+    {
+      Contract.Requires(args != null);
+      Contract.Requires(stream != null);
+      const int opBindingStrength = 0x90;
+      bool parensNeeded = opBindingStrength < contextBindingStrength ||
+                          (fragileContext && opBindingStrength == contextBindingStrength);
+
+      if (parensNeeded)
+      {
+        stream.Write("(");
+      }
+
+      cce.NonNull(args[0]).EmitJSON(stream, jsonWriter, opBindingStrength, false);
+      stream.Write("[");
+
+      string sep = "";
+      int lastIndex = withRhs ? args.Count - 1 : args.Count;
+      for (int i = 1; i < lastIndex; ++i)
+      {
+        stream.Write(sep);
+        sep = ", ";
+        cce.NonNull(args[i]).EmitJSON(stream, jsonWriter);
+      }
+
+      if (withRhs)
+      {
+        stream.Write(" := ");
+        cce.NonNull(args.Last()).EmitJSON(stream, jsonWriter);
       }
 
       stream.Write("]");
@@ -3462,6 +3759,15 @@ namespace Microsoft.Boogie
       MapSelect.Emit(args, stream, contextBindingStrength, fragileContext, true);
     }
 
+    public void EmitJSON(IList<Expr> /*!*/ args, TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, 
+      int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(args != null);
+      //Contract.Requires(stream != null);
+      Contract.Assert(args.Count == Arity + 2);
+      MapSelect.EmitJSON(args, stream, jsonWriter, contextBindingStrength, fragileContext, true);
+    }
+
     public void Resolve(ResolutionContext rc, Expr subjectForErrorReporting)
     {
       //Contract.Requires(subjectForErrorReporting != null);
@@ -3617,6 +3923,24 @@ namespace Microsoft.Boogie
       stream.Write(")");
       stream.pop();
     }
+    public void EmitJSON(IList<Expr> args, TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      //Contract.Requires(args != null);
+      stream.SetToken(this);
+      Contract.Assert(args.Count == 3);
+      stream.push();
+      stream.Write("(if ");
+      cce.NonNull(args[0]).Emit(stream, 0x00, false);
+      stream.sep();
+      stream.Write(" then ");
+      cce.NonNull(args[1]).Emit(stream, 0x00, false);
+      stream.sep();
+      stream.Write(" else ");
+      cce.NonNull(args[2]).Emit(stream, 0x00, false);
+      stream.Write(")");
+      stream.pop();
+    }
 
     public void Resolve(ResolutionContext rc, Expr subjectForErrorReporting)
     {
@@ -3751,6 +4075,33 @@ namespace Microsoft.Boogie
       {
         Contract.Assert(b != null);
         b.Emit(stream, level + 1);
+      }
+
+      stream.WriteLine();
+      stream.WriteLine(level, "}|");
+
+      stream.WriteLine();
+      stream.WriteLine();
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      //level++;
+      int level = 0;
+      stream.WriteLine(level, "|{");
+
+      if (this.LocVars.Count > 0)
+      {
+        stream.Write(level + 1, "var ");
+        this.LocVars.EmitJSON(stream, jsonWriter, true);
+        stream.WriteLine(";");
+      }
+
+      foreach (Block /*!*/ b in this.Blocks)
+      {
+        Contract.Assert(b != null);
+        b.EmitJSON(stream, jsonWriter, level + 1);
       }
 
       stream.WriteLine();
@@ -3920,6 +4271,27 @@ namespace Microsoft.Boogie
       }
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      stream.SetToken(this);
+      int opBindingStrength = 0x90;
+      bool parensNeeded = opBindingStrength < contextBindingStrength ||
+                          (fragileContext && opBindingStrength == contextBindingStrength);
+
+      if (parensNeeded)
+      {
+        stream.Write("(");
+      }
+
+      Bitvector.EmitJSON(stream, jsonWriter, opBindingStrength, false);
+      stream.Write("[" + End + ":" + Start + "]");
+      if (parensNeeded)
+      {
+        stream.Write(")");
+      }
+    }
+
     public override void Resolve(ResolutionContext rc)
     {
       //Contract.Requires(rc != null);
@@ -4065,7 +4437,6 @@ namespace Microsoft.Boogie
       int h = this.E0.GetHashCode() ^ this.E1.GetHashCode() * 17;
       return h;
     }
-
     public override void Emit(TokenTextWriter stream, int contextBindingStrength, bool fragileContext)
     {
       //Contract.Requires(stream != null);
@@ -4084,6 +4455,30 @@ namespace Microsoft.Boogie
       // while this operator is associative, our incomplete axioms in int translation don't
       // make much use of it, so better stick to the actual tree shape
       E1.Emit(stream, opBindingStrength, true);
+      if (parensNeeded)
+      {
+        stream.Write(")");
+      }
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength, bool fragileContext)
+    {
+      //Contract.Requires(stream != null);
+      stream.SetToken(this);
+      int opBindingStrength = 0x32;
+      bool parensNeeded = opBindingStrength < contextBindingStrength ||
+                          (fragileContext && opBindingStrength == contextBindingStrength);
+
+      if (parensNeeded)
+      {
+        stream.Write("(");
+      }
+
+      E0.EmitJSON(stream, jsonWriter, opBindingStrength, false);
+      stream.Write(" ++ ");
+      // while this operator is associative, our incomplete axioms in int translation don't
+      // make much use of it, so better stick to the actual tree shape
+      E1.EmitJSON(stream, jsonWriter, opBindingStrength, true);
       if (parensNeeded)
       {
         stream.Write(")");

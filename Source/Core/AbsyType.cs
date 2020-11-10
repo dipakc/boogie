@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Collections.Generic;
 using System.Diagnostics.Contracts;
+using System.Text.Json;
 
 namespace Microsoft.Boogie
 {
@@ -47,7 +48,15 @@ namespace Microsoft.Boogie
       this.Emit(stream, 0);
     }
 
+    public void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter)
+    {
+      Contract.Requires(stream != null);
+      this.EmitJSON(stream, jsonWriter, 0);
+    }
+
     public abstract void Emit(TokenTextWriter /*!*/ stream, int contextBindingStrength);
+    
+    public abstract void EmitJSON(TokenTextWriter /*!*/ stream, Utf8JsonWriter jsonWriter, int contextBindingStrength);
 
     [Pure]
     public override string ToString()
@@ -804,6 +813,13 @@ namespace Microsoft.Boogie
       }
     }
 
+    public static void EmitJSONOptionalTypeParams(TokenTextWriter stream, Utf8JsonWriter jsonWriter, List<TypeVariable> typeParams)
+    {
+      Contract.Requires(typeParams != null);
+      Contract.Requires(stream != null);
+      typeParams.EmitJSON(stream, jsonWriter, ","); // default binding strength of 0 is ok
+    }
+
     // Sort the type parameters according to the order of occurrence in the argument types
     public static List<TypeVariable> /*!*/ SortTypeParams(List<TypeVariable> /*!*/ typeParams,
       List<Type> /*!*/ argumentTypes, Type resultType)
@@ -948,6 +964,12 @@ namespace Microsoft.Boogie
       throw new NotImplementedException();
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      Contract.Requires(stream != null);
+      throw new NotImplementedException();
+    }
+
     public override bool Equals(Type that, List<TypeVariable> thisBoundVariables, List<TypeVariable> thatBoundVariables)
     {
       Contract.Requires(that != null);
@@ -1035,6 +1057,15 @@ namespace Microsoft.Boogie
       // no parentheses are necessary for basic types
       stream.SetToken(this);
       stream.Write("{0}", this);
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      // no parentheses are necessary for basic types
+      stream.SetToken(this);
+      jsonWriter.WriteStringValue(string.Format("{0}", this));
+      // stream.Write("{0}", this);
     }
 
     [Pure]
@@ -1276,6 +1307,14 @@ namespace Microsoft.Boogie
       stream.Write("{0}", this);
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      // no parentheses are necessary for bitvector-types
+      stream.SetToken(this);
+      stream.Write("{0}", this);
+    }
+
     public override string ToString()
     {
       Contract.Ensures(Contract.Result<string>() != null);
@@ -1428,6 +1467,14 @@ namespace Microsoft.Boogie
     //-----------  Linearisation  ----------------------------------
 
     public override void Emit(TokenTextWriter stream, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      // no parentheses are necessary for bitvector-types
+      stream.SetToken(this);
+      stream.Write("{0}", this);
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
     {
       //Contract.Requires(stream != null);
       // no parentheses are necessary for bitvector-types
@@ -1893,6 +1940,14 @@ Contract.Requires(that != null);
       CtorType.EmitCtorType(this.Name, Arguments, stream, contextBindingStrength);
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      stream.SetToken(this);
+      // PR: should unresolved types be syntactically distinguished from resolved types?
+      CtorType.EmitJSONCtorType(this.Name, Arguments, stream, jsonWriter, contextBindingStrength);
+    }
+
     //-----------  Getters/Issers  ----------------------------------
 
     public override bool IsUnresolved
@@ -2159,6 +2214,13 @@ Contract.Requires(that != null);
       stream.Write("{0}", TokenTextWriter.SanitizeIdentifier(this.Name));
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      // never put parentheses around variables
+      stream.SetToken(this);
+      stream.Write("{0}", TokenTextWriter.SanitizeIdentifier(this.Name));
+    }
     //-----------  Resolution  ----------------------------------
 
     public override Type ResolveType(ResolutionContext rc)
@@ -2421,6 +2483,22 @@ Contract.Requires(that != null);
       if (p != null)
       {
         p.Emit(stream, contextBindingStrength);
+      }
+      else
+      {
+        // no need for parentheses
+        stream.SetToken(this);
+        stream.Write("{0}", TokenTextWriter.SanitizeIdentifier(this.Name));
+      }
+    }
+
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      Type p = ProxyFor;
+      if (p != null)
+      {
+        p.EmitJSON(stream, jsonWriter, contextBindingStrength);
       }
       else
       {
@@ -3580,6 +3658,12 @@ Contract.Requires(that != null);
       CtorType.EmitCtorType(this.Decl.Name, Arguments, stream, contextBindingStrength);
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      stream.SetToken(this);
+      CtorType.EmitJSONCtorType(this.Decl.Name, Arguments, stream, jsonWriter, contextBindingStrength);
+    }
     //-----------  Resolution  ----------------------------------
 
     public override Type ResolveType(ResolutionContext rc)
@@ -3964,6 +4048,22 @@ Contract.Requires(that != null);
       }
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      stream.SetToken(this);
+      // If this type has a "builtin" attribute, use the corresponding user-provided string to represent the type.
+      string builtin = GetBuiltin();
+      if (builtin != null)
+      {
+        stream.Write(builtin);
+      }
+      else
+      {
+        EmitJSONCtorType(this.Decl.Name, Arguments, stream, jsonWriter, contextBindingStrength);
+      }
+    }
+
     internal static void EmitCtorType(string name, List<Type> args, TokenTextWriter stream, int contextBindingStrength)
     {
       Contract.Requires(stream != null);
@@ -3982,6 +4082,31 @@ Contract.Requires(that != null);
         // use a lower binding strength for the last argument
         // to allow map-types without parentheses
         t.Emit(stream, i == 1 ? 1 : 2);
+        i = i - 1;
+      }
+
+      if (opBindingStrength < contextBindingStrength)
+        stream.Write(")");
+    }
+
+    internal static void EmitJSONCtorType(string name, List<Type> args, TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      Contract.Requires(stream != null);
+      Contract.Requires(args != null);
+      Contract.Requires(name != null);
+      int opBindingStrength = args.Count > 0 ? 0 : 2;
+      if (opBindingStrength < contextBindingStrength)
+        stream.Write("(");
+
+      stream.Write("{0}", TokenTextWriter.SanitizeIdentifier(name));
+      int i = args.Count;
+      foreach (Type /*!*/ t in args)
+      {
+        Contract.Assert(t != null);
+        stream.Write(" ");
+        // use a lower binding strength for the last argument
+        // to allow map-types without parentheses
+        t.EmitJSON(stream, jsonWriter, i == 1 ? 1 : 2);
         i = i - 1;
       }
 
@@ -4448,6 +4573,25 @@ Contract.Assert(var != null);
         stream.Write(")");
     }
 
+    public override void EmitJSON(TokenTextWriter stream, Utf8JsonWriter jsonWriter, int contextBindingStrength)
+    {
+      //Contract.Requires(stream != null);
+      stream.SetToken(this);
+
+      const int opBindingStrength = 1;
+      if (opBindingStrength < contextBindingStrength)
+        stream.Write("(");
+
+      EmitJSONOptionalTypeParams(stream, jsonWriter, TypeParameters);
+
+      stream.Write("[");
+      Arguments.EmitJSON(stream, jsonWriter, ","); // default binding strength of 0 is ok
+      stream.Write("]");
+      Result.EmitJSON(stream, jsonWriter); // default binding strength of 0 is ok
+
+      if (opBindingStrength < contextBindingStrength)
+        stream.Write(")");
+    }
     //-----------  Resolution  ----------------------------------
 
     public override Type ResolveType(ResolutionContext rc)

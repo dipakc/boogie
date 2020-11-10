@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Diagnostics.Contracts;
+using System.IO;
+using System.Text.RegularExpressions;
 using Microsoft.Boogie.VCExprAST;
 
 namespace Microsoft.Boogie.SMTLib
@@ -12,6 +14,8 @@ namespace Microsoft.Boogie.SMTLib
   {
     private UniqueNamer Namer;
     private readonly SMTLibProverOptions Options;
+
+    private bool Synth = CommandLineOptions.Clo.Synth;
 
     private HashSet<Function /*!*/> /*!*/
       RegisteredRelations = new HashSet<Function>();
@@ -261,8 +265,36 @@ namespace Microsoft.Boogie.SMTLib
             if (RegisteredRelations.Contains(op.Func))
               decl = "(declare-rel " + printedName + " (" + argTypes + ") " + ")";
             else
-              decl = "(declare-fun " + printedName + " (" + argTypes + ") " +
-                     TypeToStringReg(f.OutParams[0].TypedIdent.Type) + ")";
+            {
+              if (!Synth)
+              {
+                decl = "(declare-fun " + printedName + " (" + argTypes + ") " +
+                       TypeToStringReg(f.OutParams[0].TypedIdent.Type) + ")";
+              }
+              else
+              {
+                if (QKeyValue.FindBoolAttribute(f.Attributes, "hole"))
+                {
+                  argTypes = f.InParams.Cast<Variable>().MapConcat(
+                    p => $"({p.TypedIdent.Name} {TypeToStringReg(p.TypedIdent.Type)})", " ");
+
+                  string nodeType = TypeToString(node.Type);
+
+                  string grammar = File.ReadAllText(CommandLineOptions.Clo.SynthGrammarFilePath);
+                  grammar = grammar.Replace(@"%TYPE%", nodeType).Trim();
+                  grammar = Regex.Replace(grammar, @"^\(synth-grammar", "");
+                  grammar = Regex.Replace(grammar, @"\)$", "");
+
+                  decl = $"\n(synth-fun {printedName} ({argTypes}) {nodeType} {grammar})\n";
+                }
+                else
+                {
+                  decl = "(declare-var " + printedName +
+                         " (-> " + argTypes + " " + TypeToStringReg(f.OutParams[0].TypedIdent.Type) + "))";
+                }
+              }
+            }
+
             AddDeclaration(decl);
             if (declHandler != null) declHandler.FuncDecl(f);
           }
@@ -282,8 +314,26 @@ namespace Microsoft.Boogie.SMTLib
         string printedName = Namer.GetQuotedName(node, node.Name);
         Contract.Assert(printedName != null);
         RegisterType(node.Type);
-        string decl =
-          "(declare-fun " + printedName + " () " + TypeToString(node.Type) + ")";
+        string decl;
+        if (!Synth)
+        {
+          decl = "(declare-fun " + printedName + " () " + TypeToString(node.Type) + ")";
+        }
+        else
+        {
+          if (printedName == "unk") // TODO: Remove this
+          {
+            string nodeType = TypeToString(node.Type);
+            string nts = $"((Start {nodeType}))";
+            string grammar = $"((Start {nodeType} ((Constant {nodeType}))))";
+            decl = $"\n(synth-fun {printedName} () {nodeType} {nts} {grammar})\n";
+          }
+          else
+          {
+            decl = "(declare-var " + printedName + " " + TypeToString(node.Type) + ")";
+          }
+        }
+
         if (!(printedName.StartsWith("assume$$") || printedName.StartsWith("soft$$") ||
               printedName.StartsWith("try$$")))
         {

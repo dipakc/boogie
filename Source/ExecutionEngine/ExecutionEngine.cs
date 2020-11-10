@@ -10,6 +10,7 @@ using VC;
 using BoogiePL = Microsoft.Boogie;
 using System.Runtime.Caching;
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace Microsoft.Boogie
 {
@@ -609,11 +610,26 @@ namespace Microsoft.Boogie
 
         writer.WriteLine();
         program.Emit(writer);
+        
+        var printJSON = false;
+        if (printJSON)
+        {
+          String jsonFileName = ""; //TODO: Read output filename
+
+          using (var stream = File.Create(jsonFileName))
+          using (var jsonWriter = new Utf8JsonWriter(
+            stream, new JsonWriterOptions
+            {
+              Indented = true
+            }))
+          {
+            program.EmitJSON(writer, jsonWriter);
+          }
+        }
       }
 
       CommandLineOptions.Clo.PrintDesugarings = oldPrintDesugaring;
     }
-
 
     /// <summary>
     /// Parse the given files into one Boogie program.  If an I/O or parse error occurs, an error will be printed
@@ -1376,7 +1392,7 @@ namespace Microsoft.Boogie
     private static PipelineOutcome RunHoudini(Program program, PipelineStatistics stats, ErrorReporterDelegate er)
     {
       Contract.Requires(stats != null);
-      
+
       if (CommandLineOptions.Clo.StagedHoudini != null)
       {
         return RunStagedHoudini(program, stats, er);

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Diagnostics;
+using SProcess = System.Diagnostics.Process;
 using System.Diagnostics.Contracts;
 using Microsoft.Boogie.VCExprAST;
 using Microsoft.Boogie.TypeErasure;
@@ -48,6 +49,8 @@ namespace Microsoft.Boogie.SMTLib
     private bool usingUnsatCore;
     private RPFP rpfp = null;
 
+    private bool Synth = CommandLineOptions.Clo.Synth;
+
     [ContractInvariantMethod]
     void ObjectInvariant()
     {
@@ -87,7 +90,10 @@ namespace Microsoft.Boogie.SMTLib
         DeclCollector.SetDeclHandler(declHandler);
       }
 
+      //if (!Synth)
+      //{
       SetupProcess();
+      //}
 
       if (CommandLineOptions.Clo.StratifiedInlining > 0 || CommandLineOptions.Clo.ContractInfer
                                                         || CommandLineOptions.Clo.SecureVcGen != null)
@@ -99,6 +105,11 @@ namespace Microsoft.Boogie.SMTLib
         }
 
         PrepareCommon();
+      }
+
+      if (Synth)
+      {
+        synthInput = new StringBuilder();
       }
     }
 
@@ -179,6 +190,8 @@ namespace Microsoft.Boogie.SMTLib
     protected TextWriter currentLogFile;
     protected volatile ErrorHandler currentErrorHandler;
 
+    private StringBuilder synthInput = null;
+
     private void FeedTypeDeclsToProver()
     {
       foreach (string s in DeclCollector.GetNewDeclarations())
@@ -214,6 +227,11 @@ namespace Microsoft.Boogie.SMTLib
     private void Send(string s, bool isCommon)
     {
       s = Sanitize(s);
+
+      if (synthInput != null)
+      {
+        synthInput.Append(s).Append("\r\n");
+      }
 
       if (isCommon)
         common.Append(s).Append("\r\n");
@@ -479,6 +497,84 @@ namespace Microsoft.Boogie.SMTLib
       }
     }
 
+    private void PrepareCommonSynthesis()
+    {
+      if (common.Length == 0)
+      {
+        SendCommon("(set-option :print-success false)");
+        SendCommon("(set-info :smt-lib-version 2.6)");
+
+        if (options.ProduceModel())
+          SendCommon("(set-option :produce-models true)");
+
+        foreach (var opt in options.SmtOptions)
+        {
+          SendCommon("(set-option :" + opt.Option + " " + opt.Value + ")");
+        }
+
+        if (!string.IsNullOrEmpty(options.Logic))
+        {
+          SendCommon("(set-logic " + options.Logic + ")");
+        }
+
+        SendCommon("(set-option :lang sygus2)");
+        SendCommon("(set-option :sygus-si all)");
+        SendCommon("(set-option :uf-ho true)");
+
+        // Set produce-unsat-cores last. It seems there's a bug in Z3 where if we set it earlier its value
+        // gets reset by other set-option commands ( https://z3.codeplex.com/workitem/188 )
+        if (CommandLineOptions.Clo.PrintNecessaryAssumes || CommandLineOptions.Clo.EnableUnSatCoreExtract == 1 ||
+            (CommandLineOptions.Clo.ContractInfer && (CommandLineOptions.Clo.UseUnsatCoreForContractInfer ||
+                                                      CommandLineOptions.Clo.ExplainHoudini)))
+        {
+          SendCommon("(set-option :produce-unsat-cores true)");
+          this.usingUnsatCore = true;
+        }
+
+        SendCommon("; done setting options\n");
+        SendCommon(_backgroundPredicates);
+
+        if (options.UseTickleBool)
+        {
+          SendCommon("(declare-var tickleBool (-> Bool Bool))");
+          SendCommon("(assert (and (tickleBool true) (tickleBool false)))");
+        }
+
+        if (CommandLineOptions.Clo.RunDiagnosticsOnTimeout)
+        {
+          SendCommon("(declare-var timeoutDiagnostics (-> Int Bool))");
+        }
+
+        PrepareDataTypes();
+
+        if (CommandLineOptions.Clo.ProverPreamble != null)
+        {
+          SendCommon("(include \"" + CommandLineOptions.Clo.ProverPreamble + "\")");
+        }
+
+        PrepareFunctionDefinitions();
+      }
+
+      if (!AxiomsAreSetup)
+      {
+        var axioms = ctx.Axioms;
+        var nary = axioms as VCExprNAry;
+        if (nary != null && nary.Op == VCExpressionGenerator.AndOp)
+          foreach (var expr in nary.UniformArguments)
+          {
+            var str = VCExpr2String(expr, -1);
+            if (str != "true")
+              AddAxiom(str);
+          }
+        else
+          AddAxiom(VCExpr2String(axioms, -1));
+
+        AxiomsAreSetup = true;
+        CachedAxBuilder = AxBuilder;
+        CachedNamer = Namer;
+      }
+    }
+
     public override int FlushAxiomsToTheoremProver()
     {
       // we feed the axioms when BeginCheck is called.
@@ -539,6 +635,8 @@ namespace Microsoft.Boogie.SMTLib
       //Contract.Requires(descriptiveName != null);
       //Contract.Requires(vc != null);
       //Contract.Requires(handler != null);
+
+
       rpfp = null;
 
       if (options.SeparateLogFiles) CloseLogFile(); // shouldn't really happen
@@ -579,6 +677,7 @@ namespace Microsoft.Boogie.SMTLib
           SendThisVC("(set-option :" + Z3.RandomSeedOption + " " + options.RandomSeed.Value + ")");
         }
       }
+
       SendThisVC(vcString);
 
       SendOptimizationRequests();
@@ -601,6 +700,87 @@ namespace Microsoft.Boogie.SMTLib
       }
 
       SendCheckSat();
+      FlushLogFile();
+    }
+
+    public override void BeginCheckSynthesis(string descriptiveName, VCExpr vc, ErrorHandler handler)
+    {
+      //Contract.Requires(descriptiveName != null);
+      //Contract.Requires(vc != null);
+      //Contract.Requires(handler != null);
+
+
+      rpfp = null;
+
+      if (options.SeparateLogFiles) CloseLogFile(); // shouldn't really happen
+
+      if (options.LogFilename != null && currentLogFile == null)
+      {
+        currentLogFile = OpenOutputFile(descriptiveName);
+        currentLogFile.Write(common.ToString());
+      }
+
+      PrepareCommonSynthesis();
+      FlushAndCacheCommons();
+
+      if (HasReset)
+      {
+        AxBuilder = (TypeAxiomBuilder) CachedAxBuilder?.Clone();
+        Namer = (SMTLibNamer) CachedNamer.Clone();
+        Namer.ResetLabelCount();
+        DeclCollector.SetNamer(Namer);
+        DeclCollector.Push();
+      }
+
+      OptimizationRequests.Clear();
+
+      string vcString = "(constraint \n" + VCExpr2String(vc, 1) + "\n)";
+      FlushAxioms();
+
+      PossiblyRestart();
+
+      // Incremental mode not supported in synthesis.
+      // SendThisVC("(push 1)");
+
+      SendThisVC("(set-info :boogie-vc-id " + SMTLibNamer.QuoteId(descriptiveName) + ")");
+
+      /*
+      //Synthesis using Z3 not supported.
+      if (options.Solver == SolverKind.Z3)
+      {
+        SendThisVC("(set-option :" + Z3.TimeoutOption + " " + options.TimeLimit + ")");
+        SendThisVC("(set-option :" + Z3.RlimitOption + " " + options.ResourceLimit + ")");
+        if (options.RandomSeed.HasValue)
+        {
+          SendThisVC("(set-option :" + Z3.RandomSeedOption + " " + options.RandomSeed.Value + ")");
+        }
+      }
+      */
+      SendThisVC(vcString);
+
+      SendOptimizationRequests();
+
+      FlushLogFile();
+
+      // Synthesis does not support incremental mode
+      /*
+      if (Process != null)
+      {
+        Process.PingPong(); // flush any errors
+
+        if (Process.Inspector != null)
+          Process.Inspector.NewProblem(descriptiveName);
+      }
+      */
+
+      if (HasReset)
+      {
+        DeclCollector.Pop();
+        common = new StringBuilder(CachedCommon);
+        HasReset = false;
+      }
+
+      SendCheckSynth();
       FlushLogFile();
     }
 
@@ -2307,6 +2487,10 @@ namespace Microsoft.Boogie.SMTLib
 
         switch (resp.Name)
         {
+          case "define-fun":
+            Console.WriteLine("Edsger synthesized 1 function.");
+            Console.WriteLine(resp.ToString());
+            break;
           case "unsat":
             result = Outcome.Valid;
             break;
@@ -2631,6 +2815,12 @@ namespace Microsoft.Boogie.SMTLib
       SendThisVC("(check-sat)");
     }
 
+    public void SendCheckSynth()
+    {
+      UsedNamedAssumes = null;
+      SendThisVC("(check-synth)");
+    }
+
     public override void SetTimeout(int ms)
     {
       options.TimeLimit = ms;
@@ -2645,7 +2835,7 @@ namespace Microsoft.Boogie.SMTLib
     {
       options.RandomSeed = randomSeed;
     }
-    
+
     object ParseValueFromProver(SExpr expr)
     {
       return expr.ToString().Replace(" ", "").Replace("(", "").Replace(")", "");

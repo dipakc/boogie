@@ -37,3 +37,6 @@ Source/*.userprefs
 
 # Rider files
 .idea/
+
+# macos files
+.DS_Store

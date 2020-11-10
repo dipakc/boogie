@@ -135,8 +135,16 @@ namespace Microsoft.Boogie.SMTLib
           SolverArguments.Add("-smt2 -in");
           break;
         case SolverKind.CVC4:
-          SolverArguments.Add(
-            "--lang=smt --no-strict-parsing --no-condense-function-values --incremental --produce-models");
+          if (CommandLineOptions.Clo.Synth)
+          {
+            SolverArguments.Add(
+              "--lang=sygus2 --no-strict-parsing --no-condense-function-values --produce-models"); // --tlimit=10000
+          }
+          else
+          {
+            SolverArguments.Add(
+              "--lang=smt --no-strict-parsing --no-condense-function-values --incremental --produce-models");
+          }
           if (Logic == null) Logic = "ALL_SUPPORTED";
           break;
         case SolverKind.YICES2:
