@@ -2488,7 +2488,7 @@ namespace Microsoft.Boogie.SMTLib
         switch (resp.Name)
         {
           case "define-fun":
-            Console.WriteLine("Edsger synthesized 1 function.");
+            Console.WriteLine("EdsgerDriver synthesized 1 function.");
             Console.WriteLine(resp.ToString());
             break;
           case "unsat":
