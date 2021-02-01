@@ -515,6 +515,9 @@ namespace Microsoft.Boogie
         CoalesceBlocks(program);
 
         Inline(program);
+        
+        // TODO: dipakc/progtransform
+        ProgTransform(program);
 
         var stats = new PipelineStatistics();
         oc = InferAndVerify(program, stats, 1 < CommandLineOptions.Clo.VerifySnapshots ? programId : null);
@@ -847,7 +850,36 @@ namespace Microsoft.Boogie
       }
     }
 
+    
+    // TODO: dipakc/progtransform
+    // TODO Move this to Edsger
+    public static void ProgTransform(Program program)
+    {
+      Contract.Requires(program != null);
+      if (CommandLineOptions.Clo.Trace)
+        Console.WriteLine("Transforming the Program ...");
 
+      var TopLevelDeclarations = cce.NonNull(program.TopLevelDeclarations);
+
+      // TODO: Why is this done?
+      foreach (var impl in TopLevelDeclarations.OfType<Implementation>())
+      {
+        impl.OriginalBlocks = impl.Blocks;
+        impl.OriginalLocVars = impl.LocVars;
+      }
+
+      foreach (var impl in TopLevelDeclarations.OfType<Implementation>())
+      {
+        ProgTransformer.ProcessImplementation(program, impl);
+      }
+
+      foreach (var impl in TopLevelDeclarations.OfType<Implementation>())
+      {
+        impl.OriginalBlocks = null;
+        impl.OriginalLocVars = null;
+      }
+    }
+    
     /// <summary>
     /// Given a resolved and type checked Boogie program, infers invariants for the program
     /// and then attempts to verify it.  Returns:

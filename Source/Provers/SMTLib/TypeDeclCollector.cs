@@ -273,7 +273,7 @@ namespace Microsoft.Boogie.SMTLib
               }
               else
               {
-                if (QKeyValue.FindBoolAttribute(f.Attributes, "hole"))
+                if (QKeyValue.FindBoolAttribute(f.Attributes, "synthesize"))
                 {
                   argTypes = f.InParams.Cast<Variable>().MapConcat(
                     p => $"({p.TypedIdent.Name} {TypeToStringReg(p.TypedIdent.Type)})", " ");

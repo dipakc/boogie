@@ -567,7 +567,12 @@ namespace Microsoft.Boogie.SMTLib
               AddAxiom(str);
           }
         else
-          AddAxiom(VCExpr2String(axioms, -1));
+        {
+          //TODO: Temporary change for Edsger. Skip abs declaration.
+          var axStr = VCExpr2String(axioms, -1);
+          if (!axStr.StartsWith("(forall ((x Int) ) (! (= (q@abs x) ")) 
+            AddAxiom(axStr);
+          }
 
         AxiomsAreSetup = true;
         CachedAxBuilder = AxBuilder;
@@ -756,6 +761,8 @@ namespace Microsoft.Boogie.SMTLib
         }
       }
       */
+      //TODO: Temporary change for Edsger. Skip abs declaration.
+      vcString = vcString.Replace("q@abs", "abs");
       SendThisVC(vcString);
 
       SendOptimizationRequests();
